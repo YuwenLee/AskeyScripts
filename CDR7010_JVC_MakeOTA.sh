@@ -2,44 +2,90 @@
 
 set -e
 
-FROM_VER=5.4.3.1632
+FROM_VER=5.4.3.1642
 TO_VER=5.4.3.1557
 REMOTE_SHARE=~/Remote_share/CDR7010/SHIP
 BUILD_JOB=CDR7010_JVC_SHIP_629ST_MP
 
-function update_BuildJob()
+OTA_PARAM=
+UPDATE_RECOVERY=
+
+function update_nonhlos()
 {
+  echo 
+  echo ${FUNCNAME}
+
   FROM_DIR=$(find ${REMOTE_SHARE} -type d -name "*${FROM_VER}*")
   TO_DIR=$(find ${REMOTE_SHARE} -type d -name "*${TO_VER}*")
   
   COPY_FILES="sbl1.mbn emmc_appsboot.mbn NON-HLOS.bin"
-  
-  echo 
-  echo ${FUNCNAME}
-  
+    
   if [ "${TO_DIR} " = "" ]
   then
     echo ERROR: ${TO_VER} does not exist!
     exit 1
   fi
 
-  OTASHIP=$(find ${TO_DIR} -name "$(basename ${TO_DIR}).zip")
-  if [ "${OTASHIP}" = "" ]
+  FULL_IMG=$(find ${TO_DIR} -name "$(basename ${TO_DIR}).zip")
+  if [ "${FULL_IMG}" = "" ]
   then
-    echo ERROR: msm8953_64-ota-ship.jenkins.${TO_VER}.zip does not exists
+    echo ERROR: $(basename ${TO_DIR}).zip does not exists
     exit 1
   fi
 
-  echo === Copy ${OTASHIP}
-  cp ${OTASHIP} ./
+  echo === Copy ${FULL_IMG}
+  cp ${FULL_IMG} ./
 
-  unzip $(basename ${OTASHIP}) -d otaship
+  unzip $(basename ${FULL_IMG}) -d full_img
 
   for f in ${COPY_FILES}
   do
-    cp otaship/$f ../${BUILD_JOB}/asko/LINUX/android/out/target/product/msm8953_64
-    cp otaship/$f ../${BUILD_JOB}/asko/LINUX/android/device/qcom/msm8953_64/radio
+    cp full_img/$f ../${BUILD_JOB}/asko/LINUX/android/out/target/product/msm8953_64
+    cp full_img/$f ../${BUILD_JOB}/asko/LINUX/android/device/qcom/msm8953_64/radio
   done
+}
+
+function update_recovery()
+{
+  echo 
+  echo ${FUNCNAME}
+
+  FROM_DIR=$(find ${REMOTE_SHARE} -type d -name "*${FROM_VER}*")
+  TO_DIR=$(find ${REMOTE_SHARE} -type d -name "*${TO_VER}*")
+    
+  if [ "${TO_DIR} " = "" ]
+  then
+    echo ERROR: ${TO_VER} does not exist!
+    exit 1
+  fi
+
+  FULL_IMG=$(find ${TO_DIR} -name "$(basename ${TO_DIR}).zip")
+  if [ "${FULL_IMG}" = "" ]
+  then
+    echo ERROR: $(basename ${TO_DIR}).zip does not exists
+    exit 1
+  fi
+
+  if [ ! -e $(basename ${FULL_IMG}) ]
+  then
+    echo === Copy ${FULL_IMG}
+    cp ${FULL_IMG} ./
+    unzip $(basename ${FULL_IMG}) -d full_img
+  fi
+  
+  cp full_img/recovery.img ../${BUILD_JOB}/asko/LINUX/android/out/target/product/msm8953_64
+  UPDATE_RECOVERY=-2
+}
+
+function patch_otascript_reorder_sbl1_aboot_boot_modem_system()
+{
+  echo
+  echo  ${FUNCNAME}
+  cd ../${BUILD_JOB}/asko/LINUX/android/build/tools/releasetools
+  echo === replace ota_from_target_files
+  cp -v ota_from_target_files.py.reorder_sbl1_aboot_boot_modem_system  ota_from_target_files.py
+  chmod 777 ota_from_target_files.py
+  cd - > /dev/null 2>&1
 }
 
 function make_ota()
@@ -72,12 +118,12 @@ function make_ota()
   if [ ${from4} -gt ${to4} ]
   then 
     echo ${from_ver} | awk -F. ' { print $4 } '
-    PARAM="--block --downgrade -n -v -i"
+    OTA_PARAM="--block --downgrade -n ${UPDATE_RECOVERY} -v -i "
     suffix=${suffix}_R
     echo ${from_ver} | awk -F. ' { print $1"."$2"."$3"."$4+1} ' > ${work_dir}/update_src/version.txt
   else
     echo ${to_ver}   | awk -F. ' { print $4 } '
-    PARAM="--block -v -i"
+    OTA_PARAM="--block -v -i"
     echo ${to_ver} | awk -F. ' { print $1"."$2"."$3"."$4} ' > ${work_dir}/update_src/version.txt
   fi
 
@@ -85,12 +131,10 @@ function make_ota()
   cp ${from} from.zip
   echo === copy ${to}
   cp ${to}   to.zip
-  echo === replace ota_from_target_files
-  cd ../${BUILD_JOB}/asko/LINUX/android/build/tools/releasetools
-  cp ota_from_target_files.py.reorder_sbl1_aboot_boot_modem_system ota_from_target_files.py
   echo === generate update.zip
-  cd ../../../
-  ./build/tools/releasetools/ota_from_target_files ${PARAM} ${work_dir}/from.zip ${work_dir}/to.zip ${work_dir}/update_src/update.zip
+  cd ../${BUILD_JOB}/asko/LINUX/android
+  echo ./build/tools/releasetools/ota_from_target_files ${OTA_PARAM} ${work_dir}/from.zip ${work_dir}/to.zip ${work_dir}/update_src/update.zip
+  ./build/tools/releasetools/ota_from_target_files ${OTA_PARAM} ${work_dir}/from.zip ${work_dir}/to.zip ${work_dir}/update_src/update.zip
   md5sum ${work_dir}/update_src/update.zip | awk '{print $1}' > ${work_dir}/update_src/hash.txt
   
   cd ${work_dir}
@@ -122,5 +166,7 @@ function make_ota()
 #
 # Actions start here
 #
-update_BuildJob
+update_nonhlos
+update_recovery
+patch_otascript_reorder_sbl1_aboot_boot_modem_system
 make_ota
